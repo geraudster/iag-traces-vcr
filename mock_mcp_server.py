@@ -38,7 +38,57 @@ async def list_tools() -> list[types.Tool]:
             )
     return tools
 
-# ... [Keep the is_fuzzy_match and @app.call_tool() exactly the same as before] ...
+
+def is_fuzzy_match(expected: dict, actual: dict) -> bool:
+    """Checks if the actual arguments contain the expected key-value pairs."""
+    if not isinstance(expected, dict) or not isinstance(actual, dict):
+        return expected == actual
+
+    for key, val in expected.items():
+        # Check if actual has the key and if the values match (case-insensitive for strings)
+        if key not in actual:
+            return False
+
+        actual_val = actual[key]
+        if isinstance(val, str) and isinstance(actual_val, str):
+            if val.lower() != actual_val.lower():
+                return False
+        elif val != actual_val:
+            return False
+
+    return True
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    """Intercept tool calls and return mocked data if arguments match."""
+    if name not in MOCK_DATA:
+        return [types.TextContent(type="text", text=f"Error: Tool '{name}' not found in mock data.")]
+
+    arguments = arguments or {}
+
+    # 1. Try to find a matching tool call in our trajectory
+    for call in MOCK_DATA[name]:
+        expected_input = call.get("expected_input", {})
+
+        if is_fuzzy_match(expected_input, arguments):
+            mock_output = call.get("mocked_output")
+
+            # MCP requires string outputs, so we serialize dicts
+            if isinstance(mock_output, (dict, list)):
+                text_output = json.dumps(mock_output)
+            else:
+                text_output = str(mock_output)
+
+            return [types.TextContent(type="text", text=text_output)]
+
+    # 2. Fallback error if the LLM hallucinated entirely different arguments
+    expected_list = [c.get('expected_input') for c in MOCK_DATA[name]]
+    error_msg = (
+        f"VCR Error: No mock found for tool '{name}' with arguments: {arguments}\n"
+        f"Expected one of: {json.dumps(expected_list, indent=2)}"
+    )
+    return [types.TextContent(type="text", text=error_msg)]
+
 
 async def main():
     async with stdio_server() as (read_stream, write_stream):
