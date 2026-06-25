@@ -90,13 +90,46 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=error_msg)]
 
 
-async def main():
-    async with stdio_server() as (read_stream, write_stream):
+import uvicorn
+from starlette.applications import Starlette
+from starlette.routing import Route
+from mcp.server.sse import SseServerTransport
+
+# ... [Keep your MOCK_DATA, SCHEMA_DATA, and @app decorators exactly as they are] ...
+
+# 1. Initialize the SSE Transport pointing to a dedicated messages endpoint
+sse = SseServerTransport("/messages/")
+
+# 2. Handle the initial SSE connection from the agent
+async def handle_sse(request):
+    async with sse.connect_sse(
+        request.scope,
+        request.receive,
+        request._send
+    ) as streams:
+        # Pass the streams to the MCP Server instance you defined earlier
         await app.run(
-            read_stream, 
-            write_stream, 
+            streams[0],
+            streams[1],
             app.create_initialization_options()
         )
 
+# 3. Handle incoming tool execution requests from the agent
+async def handle_messages(request):
+    await sse.handle_post_message(
+        request.scope,
+        request.receive,
+        request._send
+    )
+
+# 4. Map the endpoints to a Starlette application
+starlette_app = Starlette(
+    routes=[
+        Route("/sse", endpoint=handle_sse),
+        Route("/messages/", endpoint=handle_messages, methods=["POST"]),
+    ]
+)
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("Starting mock MCP VCR server on http://localhost:8000/sse")
+    uvicorn.run(starlette_app, host="0.0.0.0", port=8000)
